@@ -34,7 +34,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 8. 烘干含水复检：主管登记Dryer设备，released配方开DryingRun，设备行锁核时段，配方唯一作业；投入含水由称料质量快照加权计算。含水>0.05%记redry，延烘结束不可倒退且须重查设备后续占用；复测≤0.05%记passed，主管验收accepted后才允许成品新签证，证书加入烘干快照；旧certified不重算。
 9. 包装箱码追溯：certified成品按唯一箱码分包，锁同成品校验有效包装累计≤actual_kg；open可改重或取消释放额度，sealed后冻结，证书快照随箱保存。已装车仍计入累计，避免重复包装同一产出。
-10. 装车客户签收：同车只能装同配方sealed箱，ShipmentPack.pack_id唯一，加载后包状态loaded阻止再次出库；主管发车保存冻结manifest。实收与清单差率绝对值>0.5%须至少8字依据，记录客户签收快照后不得重复签收。仅本地记录交接，无实际运输消息。
+10. 装车客户签收：同车只能装同配方sealed箱，ShipmentPack.pack_id唯一，加载后包状态loaded阻止再次出库；主管发车保存冻结manifest。签收留**原秤**一条称重记录（每车唯一），随后马上按客户与发车重量档判定：落在正常损耗范围内填至少8字说明即直接结案入账；超界或尚无该档范围（样本不足）则挂起对账，可行复秤。仅本地记录交接，无实际运输消息。
+
+11. 正常损耗范围与短重结案：`LossRange`按客户+发车重量档（0–100/100–500/500–1000/1000–5000/5000–10000/10000kg以上）分版本拟合，客户名严格按车次登记值（含收货地后缀视为不同客户，建议统一命名）。**只用主管核准为正常样本且已结案的车次**做样本，样本数<5不拟合。区间=样本损耗率均值±3σ，σ下限0.05个百分点，下界钳在0（客户多收的负损耗一律超界挂起，也不得核准为损耗样本）。新版本只用于判定之后的新秤，旧称重的判定与范围版本冻结不改。`ShipmentWeighing`保留签收原秤与每次复秤（重量、损耗率、判定、范围版本、说明、记录人）；`ShipmentSettlement`一车一结，`booked_kg`即入账重量，重试结案只返回原记录不重复入账。复秤与结案并发：结案请求须携带最新称重ID，若复秤先办则按旧重量结案被驳回；结案先办则车次重量冻结、复秤被拒。样本不足时主管可逐车核准为正常样本（须至少8字依据）并结案入账，该车次随后计入拟合样本；超界车次必须先复秤回到范围内结案后才能核准。发运页面可查各次称重、范围版本与入账重量。
 
 已被任何配方引用的料包质量/原始重量不得修改；可用量只在放行扣减。重做全场分群会更新堆场当前群号，既有配方继续使用原称料时的质量/群号快照。对旧快照配方添加新版本料包会被审秤拦截，需退回并整体重新称料。
 
@@ -44,7 +46,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 17:00在「供应隔离复核」查看SL-ACCEPT-17（PET-129可用）与SL-HOLD-17（PET-131隔离），将新批SL-03关联PET-124；先审秤后隔离，再尝试最终投料，应实时拒绝且不扣料。主管按复检说明解除后方可投料。17:30已投料100kg配方的成品取样96kg、MI9.1、PVC65ppm，超过40ppm记隔离；清线复检24ppm，主管发合格证。初次65ppm、复检24ppm和投料快照全部保留。
 
-V3演练：11月24日DRY-B接BL-PELLET-UI的100kg投料，08:00—12:00烘干；实测0.04%，主管验收后成品96kg/20ppm才签证。包装PK-BROWSER-V3为25kg，封箱后放入SH-BROWSER-V3，客户华远注塑一号原料库，主管发车，客户签24.9kg，差率-0.4%保存。API另演练0.08%延烘、撞时段拒绝、包装超重/取消释放及超签收差异说明。
+V3演练：11月24日DRY-B接BL-PELLET-UI的100kg投料，08:00—12:00烘干；实测0.04%，主管验收后成品96kg/20ppm才签证。包装PK-BROWSER-V3为25kg，封箱后放入SH-BROWSER-V3，客户华远注塑一号原料库，主管发车，客户签24.9kg：该客户100kg以下档尚无拟合范围，签收原秤留存后判insufficient并挂起对账；补足5车主管核准的正常样本并拟合v1后，复秤24.95kg落在范围内，按最新秤结案入账。API另演练0.08%延烘、撞时段拒绝、包装超重/取消释放。短重结案演练：范围内填写至少8字说明直接closed；超界outside挂起，复秤回范围内后按新秤结案，按旧秤结案返回409；重试结案不重复入账；拟合新版本后旧称重判定保持原版本。
 
 ## 真实ML计算
 
@@ -64,9 +66,11 @@ V3演练：11月24日DRY-B接BL-PELLET-UI的100kg投料，08:00—12:00烘干；
 
 `backend/src/quality_models.py`：SupplierLot/LotBale/PelletCheck；`quality_schemas.py`：批次、决策、取样与复检字段；`quality_service.py`：追溯挂批/主管隔离、质量平衡、历次检验与证书快照；`quality_routes.py`：`/supplier-lots` 与 `/pellet-checks`（含bales/quarantine/clear/retest/certify）。新建三张表，不修改原表列，已有数据通过create_all扩展，无破坏性迁移。
 
-V3 `backend/src/production_models.py`定义Dryer/DryingRun/PelletPack/BlendShipment/ShipmentPack；`production_schemas.py`校验时间、含水、称重与客户收货；`production_service.py`设备锁/时段重叠、累计包装锁、装车唯一和签收差率；`production_routes.py`提供`/dryers`、`/drying-runs`、`/pellet-packs`、`/blend-shipments`。新加5张表，原表列无变更，create_all兼容历史记录。
+V3 `backend/src/production_models.py`定义Dryer/DryingRun/PelletPack/BlendShipment/ShipmentPack；`production_schemas.py`校验时间、含水、称重与客户收货；`production_service.py`设备锁/时段重叠、累计包装锁、装车唯一和签收差率判定；`production_routes.py`提供`/dryers`、`/drying-runs`、`/pellet-packs`、`/blend-shipments`。新加5张表，原表列无变更，create_all兼容历史记录。
 
-`frontend/src/pages/yard.js`堆场；`clusters.js`真实散点与中心；`bench.js`可增删称料行；`release.js`交接簿；`lots.js`供应隔离复核；`pellets.js`粒料检验与证书；`drying.js`含水复检；`packs.js`包装箱码；`shipments.js`装车客户签收。`components/labels.js`共享群标签、状态条、标签页、标题与通知，群标签在图谱、秤台与放行中复用。`utils/api.js`会话/接口/store，`utils/format.js`数字/转义/上海时区。角色、配方状态、供应批、成品检验、烘干、包装和装车状态枚举定义在`backend/src/constants.py`、`frontend/src/constants.js`，状态实际转移在`blending.py`与`main.py`，标签渲染在`components/labels.js`。
+V3.1 短重结案在`production_models.py`新增`LossRange`/`ShipmentWeighing`/`ShipmentSettlement`三张表，`production_service.py`新增`judge_loss`、`receive`（原秤+首次判定）、`reweigh`、`settle`、`approve_sample`、`fit_ranges`；`production_routes.py`新增`POST /blend-shipments/{id}/reweigh|settle|approve-sample`与`GET/POST /loss-ranges[/fit]`。`BlendShipment.state`在原有`loading/dispatched/received`之外新增`suspended/closed`两态（字符串列不迁移）；`ship_view`附带`weighings`、`settlement`、`booked_kg`、`range_version`。原`shipsments`签收差率逻辑由新判定取代，仍保留8字说明下限。
+
+`frontend/src/pages/yard.js`堆场；`clusters.js`真实散点与中心；`bench.js`可增删称料行；`release.js`交接簿；`lots.js`供应隔离复核；`pellets.js`粒料检验与证书；`drying.js`含水复检；`packs.js`包装箱码；`shipments.js`装车客户签收（含各次称重表、复秤、结案、核准正常样本与损耗范围拟合）。`components/labels.js`共享群标签、状态条、标签页、标题与通知，群标签在图谱、秤台与放行中复用。`utils/api.js`会话/接口/store，`utils/format.js`数字/转义/上海时区。角色、配方状态、供应批、成品检验、烘干、包装和装车状态枚举定义在`backend/src/constants.py`、`frontend/src/constants.js`，状态实际转移在`blending.py`与`main.py`，标签渲染在`components/labels.js`。
 
 Compose恰好frontend/backend/worker/db/redis五服务，全部healthcheck。MySQL健康检查采用127.0.0.1业务账号SELECT1，避开初始化临时socket；前端和后端也用127.0.0.1。数据库、Redis和模型文件/心跳分别为命名卷。宿主默认地址池已用尽，本项目显式10.221.26.0/24；换环境冲突时调整networks。环境变量见.env.example：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET。内网DATABASE_URL/REDIS_URL/SEED_DEMO由Compose设置。
 

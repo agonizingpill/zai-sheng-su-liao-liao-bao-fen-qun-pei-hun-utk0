@@ -3,8 +3,8 @@ from sqlalchemy import select
 from .database import Session
 from .security import current,allow
 from .blending import obj,audit
-from .production_models import Dryer,DryingRun,PelletPack,BlendShipment
-from .production_schemas import DryerInput,DryingInput,DryingMeasure,PackInput,PackWeight,ShipmentInput,LoadPack,ShipmentReceipt
+from .production_models import Dryer,DryingRun,PelletPack,BlendShipment,LossRange
+from .production_schemas import DryerInput,DryingInput,DryingMeasure,PackInput,PackWeight,ShipmentInput,LoadPack,ShipmentReceipt,ShipmentReweigh,ShipmentSettle,SampleApproval,LossRangeFit
 from . import production_service as svc
 router=APIRouter()
 @router.get('/dryers')
@@ -69,3 +69,22 @@ def dispatch(id:int,u=Depends(current)):
 def receive(id:int,p:ShipmentReceipt,u=Depends(current)):
     allow(u,'admin','blender')
     with Session.begin()as s:return svc.receive(s,id,p,u)
+@router.post('/blend-shipments/{id}/reweigh')
+def reweigh_shipment(id:int,p:ShipmentReweigh,u=Depends(current)):
+    allow(u,'admin','blender')
+    with Session.begin()as s:return svc.reweigh(s,id,p,u)
+@router.post('/blend-shipments/{id}/settle')
+def settle(id:int,p:ShipmentSettle,u=Depends(current)):
+    allow(u,'admin','blender')
+    with Session.begin()as s:return svc.settle(s,id,p,u)
+@router.post('/blend-shipments/{id}/approve-sample')
+def approve_sample(id:int,p:SampleApproval,u=Depends(current)):
+    allow(u,'admin')
+    with Session.begin()as s:return svc.approve_sample(s,id,p,u)
+@router.get('/loss-ranges')
+def loss_ranges(u=Depends(current)):
+    with Session()as s:return [svc.range_view(x)for x in s.scalars(select(LossRange).order_by(LossRange.customer,LossRange.weight_band,LossRange.version.desc()))]
+@router.post('/loss-ranges/fit')
+def fit(p:LossRangeFit,u=Depends(current)):
+    allow(u,'admin')
+    with Session.begin()as s:return svc.fit_ranges(s,p,u)

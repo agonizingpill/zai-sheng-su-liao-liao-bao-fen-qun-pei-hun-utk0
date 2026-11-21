@@ -25,3 +25,15 @@ class ShipmentReceipt(Clean):
     received_kg:Decimal=Field(gt=0,le=100000,max_digits=12,decimal_places=3)
     received_by:str=Field(min_length=2,max_length=120)
     difference_note:str=Field(default='',max_length=600)
+class ShipmentReweigh(Clean):
+    weight_kg:Decimal=Field(gt=0,le=100000,max_digits=12,decimal_places=3)
+    note:str=Field(min_length=8,max_length=600)
+    received_by:str|None=Field(default=None,max_length=120)
+class ShipmentSettle(Clean):
+    weighing_id:int=Field(gt=0)
+    note:str=Field(default='',max_length=600)
+class SampleApproval(Clean):
+    note:str=Field(min_length=8,max_length=600)
+class LossRangeFit(Clean):
+    customer:str|None=Field(default=None,max_length=120)
+    weight_band:int|None=Field(default=None,ge=0,le=20)
